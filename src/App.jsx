@@ -1,8 +1,7 @@
 // src/App.jsx
 import React, { useEffect, useState, useMemo } from "react";
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:4000";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
 function App() {
   const [status, setStatus] = useState(null);
@@ -45,6 +44,9 @@ function App() {
 
   // ===== ACTIONS =====
   async function toggleLoad(loadId, currentOn) {
+    // Fan is auto-controlled; ignore manual toggle for now
+    if (loadId === "fan") return;
+
     try {
       const res = await fetch(`${API_BASE_URL}/api/control`, {
         method: "POST",
@@ -75,27 +77,43 @@ function App() {
 
   // ===== SUMMARY NUMBERS =====
   const { totalPower, devicesOn, totalDevices, thresholdW } = useMemo(() => {
+    const threshold = status?.thresholds?.highUsage_W ?? null;
+
     if (!status?.loads) {
       return {
-        totalPower: 0,
+        totalPower: status?.totalPower_W ?? 0,
         devicesOn: 0,
         totalDevices: 0,
-        thresholdW: status?.thresholds?.highUsage_W ?? null,
+        thresholdW: threshold,
       };
     }
-    const entries = Object.values(status.loads);
-    const totalP = entries.reduce((sum, l) => sum + (l.power_W || 0), 0);
-    const onCount = entries.filter((l) => l.on).length;
+
+    const entries = Object.entries(status.loads);
+    const monitoredEntries = entries.filter(([id]) => id !== "fan");
+
+    const totalP =
+      typeof status?.totalPower_W === "number"
+        ? status.totalPower_W
+        : monitoredEntries.reduce(
+            (sum, [, l]) => sum + (l.power_W || 0),
+            0
+          );
+
+    const onCount = entries.filter(([, l]) => l.on).length;
+
     return {
       totalPower: totalP,
       devicesOn: onCount,
       totalDevices: entries.length,
-      thresholdW: status?.thresholds?.highUsage_W ?? null,
+      thresholdW: threshold,
     };
   }, [status]);
 
   function renderLoadCard(loadId, load) {
+    const isFan = loadId === "fan";
+
     const isHigh =
+      !isFan &&
       thresholdW != null &&
       typeof load.power_W === "number" &&
       load.power_W >= thresholdW;
@@ -143,11 +161,11 @@ function App() {
               fontWeight: 600,
             }}
           >
-            {load.on ? "ON" : "OFF"}
+            {isFan ? (load.on ? "AUTO • ON" : "AUTO • OFF") : load.on ? "ON" : "OFF"}
           </span>
         </div>
 
-        {/* Numbers */}
+        {/* Numbers / description */}
         <div
           style={{
             fontSize: "0.85rem",
@@ -155,19 +173,28 @@ function App() {
             color: "#d1d5db",
           }}
         >
-          <div>Voltage: {load.voltage_V?.toFixed(2)} V</div>
-          <div>Current: {load.current_A?.toFixed(3)} A</div>
-          <div>
-            Power:{" "}
-            <strong style={{ color: isHigh ? "#f97316" : "#f9fafb" }}>
-              {load.power_W?.toFixed(1)} W {isHigh && "⚠️"}
-            </strong>
-          </div>
-          <div>Energy: {load.energy_Wh?.toFixed(2)} Wh</div>
+          {isFan ? (
+            <div style={{ fontSize: "0.8rem", color: "#e5e7eb" }}>
+              Auto-controlled cooling fan that turns on when total monitored
+              power exceeds the threshold.
+            </div>
+          ) : (
+            <>
+              <div>Voltage: {load.voltage_V?.toFixed(2)} V</div>
+              <div>Current: {load.current_A?.toFixed(3)} A</div>
+              <div>
+                Power:{" "}
+                <strong style={{ color: isHigh ? "#f97316" : "#f9fafb" }}>
+                  {load.power_W?.toFixed(1)} W {isHigh && "⚠️"}
+                </strong>
+              </div>
+              <div>Energy: {load.energy_Wh?.toFixed(2)} Wh</div>
+            </>
+          )}
         </div>
 
         {/* High-usage note */}
-        {isHigh && (
+        {!isFan && isHigh && (
           <div
             style={{
               fontSize: "0.75rem",
@@ -183,22 +210,24 @@ function App() {
         )}
 
         {/* Button */}
-        <button
-          onClick={() => toggleLoad(loadId, load.on)}
-          style={{
-            marginTop: "0.45rem",
-            padding: "0.4rem 0.8rem",
-            borderRadius: "999px",
-            border: "none",
-            cursor: "pointer",
-            fontWeight: 600,
-            fontSize: "0.85rem",
-            backgroundColor: load.on ? "#ef4444" : "#22c55e",
-            color: "white",
-          }}
-        >
-          {load.on ? "Turn OFF" : "Turn ON"}
-        </button>
+        {!isFan && (
+          <button
+            onClick={() => toggleLoad(loadId, load.on)}
+            style={{
+              marginTop: "0.45rem",
+              padding: "0.4rem 0.8rem",
+              borderRadius: "999px",
+              border: "none",
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: "0.85rem",
+              backgroundColor: load.on ? "#ef4444" : "#22c55e",
+              color: "white",
+            }}
+          >
+            {load.on ? "Turn OFF" : "Turn ON"}
+          </button>
+        )}
       </div>
     );
   }
@@ -211,7 +240,7 @@ function App() {
         minHeight: "100vh",
         background: "radial-gradient(circle at top, #020617, #000 75%)",
         color: "#e5e7eb",
-        padding: "1rem 0 1.5rem", // more horizontal padding, no flex-centering
+        padding: "1rem 0 1.5rem",
       }}
     >
       <div
@@ -238,7 +267,7 @@ function App() {
               color: "#9ca3af",
             }}
           >
-            Desk Lamp • Phone Charger • Fan
+            Desk Lamp • Phone Charger • Auto-Cooling Fan
           </p>
           <div
             style={{
@@ -278,7 +307,10 @@ function App() {
               justifyContent: "center",
             }}
           >
-            <SummaryItem label="Total Power" value={`${totalPower.toFixed(1)} W`} />
+            <SummaryItem
+              label="Total Monitored Power"
+              value={`${totalPower.toFixed(1)} W`}
+            />
             <SummaryItem
               label="Devices On"
               value={`${devicesOn} / ${totalDevices}`}
@@ -299,7 +331,7 @@ function App() {
                 color: "#cbd5f5",
               }}
             >
-              Power Distribution
+              Power Distribution (Monitored Loads)
             </h2>
             <PowerPieChart loads={status?.loads} />
           </div>
@@ -404,11 +436,13 @@ function PowerPieChart({ loads }) {
     );
   }
 
-  const entries = Object.entries(loads).map(([id, l]) => ({
-    id,
-    name: l.name || id,
-    power: Math.max(0, l.power_W || 0),
-  }));
+  const entries = Object.entries(loads)
+    .filter(([id]) => id !== "fan") // exclude actuator-only fan
+    .map(([id, l]) => ({
+      id,
+      name: l.name || id,
+      power: Math.max(0, l.power_W || 0),
+    }));
 
   const total = entries.reduce((s, e) => s + e.power, 0);
 
@@ -416,7 +450,7 @@ function PowerPieChart({ loads }) {
     return (
       <PieShell>
         <span style={{ fontSize: "0.8rem", color: "#9ca3af" }}>
-          All devices at 0 W
+          Monitored loads at 0 W
         </span>
       </PieShell>
     );
@@ -425,7 +459,6 @@ function PowerPieChart({ loads }) {
   const colors = {
     lamp: "#f97316", // orange
     charger: "#22c55e", // green
-    fan: "#3b82f6", // blue
   };
 
   const cx = 50;
@@ -452,10 +485,6 @@ function PowerPieChart({ loads }) {
       "Z",
     ].join(" ");
 
-    const midAngle = startAngle + angle / 2;
-    const lx = cx + (r + 12) * Math.cos(midAngle);
-    const ly = cy + (r + 12) * Math.sin(midAngle);
-
     startAngle = endAngle;
     return {
       pathData,
@@ -463,8 +492,6 @@ function PowerPieChart({ loads }) {
       label: e.name,
       value: e.power,
       fraction,
-      lx,
-      ly,
       key: e.id,
     };
   });
